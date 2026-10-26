@@ -1,36 +1,50 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# SpaceViewer
 
-## Getting Started
+**Upload your scan. Walk the space.**  
 
-First, run the development server:
+Standalone product cloned from [Spatial Lab](../SpatialLab) Experiences: LCC / LCC2 walkthrough, quality lever, checkpoints, virtual staging, wall surfaces. Spatial Lab stays the local research lab; **this** app is what you deploy and share.
+
+## Quick start
 
 ```bash
+cd spaceviewer
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+1. Upload a **ZIP** of an LCC/LCC2 package (must contain `meta.lcc2` or `meta.lcc`), or pick the **folder**, or paste a public **URL** to `meta.lcc2`.
+2. Walk with pads / keyboard; use **Graphics** Performance ↔ Quality; open **Dev** for staging and walls.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+PLY upload is accepted; full tour tools need LCC2 (PLY preview via SuperSplat is planned).
 
-## Learn More
+## How local packages work
 
-To learn more about Next.js, take a look at the following resources:
+Large packages are **not** committed to git. On open, files go into the browser **Cache Storage** and a service worker serves them at `/sv-pkg/<id>/…` so the XGRIDS LCC SDK can load tiles relative to `meta.lcc2`.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Deploy (efficient path)
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+| Piece | Choice |
+|-------|--------|
+| App | **Vercel** — single Next.js project (this repo). **No** FastAPI multi-service. |
+| User content (production) | **Firebase Storage** or **Cloudflare R2** — upload ZIP → extract or store → HTTPS URLs → Open URL / future auto-open |
+| SDK vendor | Already in `public/vendor/lcc-web-sdk` (~3.5 MB) — fine in git |
 
-## Deploy on Vercel
+Do **not** put proprietary sample apartments in this repo. Users bring their own packages.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Firebase is a good fit if you already use it: Storage for packages + optional Hosting later. R2 is often cheaper for heavy download traffic.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+See `docs/ARCHITECTURE.md`.
+
+## Relation to Spatial Lab
+
+| Spatial Lab | SpaceViewer |
+|-------------|-------------|
+| LiDAR, calibration, Experiences R&D | Shareable viewer |
+| Local samples + FastAPI | User upload / CDN URLs |
+| Feature source of truth | Port mature Features here |
+
+## License / XGRIDS
+
+Vendored LCC Web SDK and any user-uploaded LCC data are subject to XGRIDS terms. Confirm commercial license / `appKey` before production.

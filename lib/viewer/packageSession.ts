@@ -1,0 +1,211 @@
+/**
+ * Open a user-provided LCC/LCC2 package (ZIP or folder) or a remote URL / PLY.
+ * ZIP/folder files are cached under /sv-pkg/<id>/… and served by public/sv-fs-sw.js
+ * so the LCC SDK can resolve tile paths relative to meta.lcc2.
+ */
+
+import JSZip from "jszip";
+
+export type OpenedScene =
+  | {
+      kind: "lcc";
+      id: string;
+      /** URL the LCC SDK should load (meta.lcc2 / meta.lcc). */
+      dataPath: string;
+      label: string;
+      source: "zip" | "folder" | "url";
+    }
+  | {
+      kind: "ply";
+      id: string;
+      dataPath: string;
+      label: string;
+      source: "file" | "url";
+      /** Object URL — revoke when clearing the session. */
+      objectUrl?: string;
+    };
+
+const CACHE_PREFIX = "sv-pkg-";
+
+function mimeFor(path: string): string {
+  const lower = path.toLowerCase();
+  if (lower.endsWith(".json")) return "application/json";
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".webp")) return "image/webp";
+  if (lower.endsWith(".bin")) return "application/octet-stream";
+  if (lower.endsWith(".ply")) return "application/octet-stream";
+  if (lower.endsWith(".lcc") || lower.endsWith(".lcc2")) return "application/octet-stream";
+  return "application/octet-stream";
+}
+
+function normalizeZipPath(p: string): string {
+  return p.replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
+function findMetaPath(paths: string[]): string | null {
+  const metas = paths.filter((p) => {
+    const base = p.split("/").pop()?.toLowerCase() ?? "";
+    return base === "meta.lcc2" || base === "meta.lcc";
+  });
+  if (metas.length === 0) return null;
+  // Prefer shorter path (shallower package root).
+  metas.sort((a, b) => a.split("/").length - b.split("/").length || a.length - b.length);
+  return metas[0]!;
+}
+
+function packageRootAndRel(metaPath: string): { root: string; relMeta: string } {
+  const i = metaPath.lastIndexOf("/");
+  if (i < 0) return { root: "", relMeta: metaPath };
+  return { root: metaPath.slice(0, i + 1), relMeta: metaPath.slice(i + 1) };
+}
+
+async function ensureServiceWorker(): Promise<ServiceWorkerRegistration> {
+  if (!("serviceWorker" in navigator)) {
+    throw new Error("Service workers are required to open local LCC packages in the browser.");
+  }
+  const reg = await navigator.serviceWorker.register("/sv-fs-sw.js");
+  await navigator.serviceWorker.ready;
+  if (!navigator.serviceWorker.controller) {
+    // First load: force control so /sv-pkg fetches hit the worker.
+    await new Promise<void>((resolve) => {
+      const onChange = () => {
+        navigator.serviceWorker.removeEventListener("controllerchange", onChange);
+        resolve();
+      };
+      navigator.serviceWorker.addEventListener("controllerchange", onChange);
+      // If already controlling shortly after ready, resolve soon.
+      window.setTimeout(() => resolve(), 800);
+    });
+  }
+  return reg;
+}
+
+async function putFilesInCache(
+  id: string,
+  files: { path: string; blob: Blob }[],
+): Promise<void> {
+  const cache = await caches.open(CACHE_PREFIX + id);
+  await Promise.all(
+    files.map(({ path, blob }) => {
+      const url = `/sv-pkg/${id}/${path.split("/").map(encodeURIComponent).join("/")}`;
+      return cache.put(
+        url,
+        new Response(blob, {
+          headers: {
+            "Content-Type": mimeFor(path),
+            "Cache-Control": "no-store",
+          },
+        }),
+      );
+    }),
+  );
+}
+
+export async function clearPackageSession(id: string): Promise<void> {
+  await caches.delete(CACHE_PREFIX + id);
+  const reg = await navigator.serviceWorker.getRegistration();
+  reg?.active?.postMessage({ type: "drop-cache", id });
+}
+
+export async function openLccFromZip(file: File): Promise<OpenedScene> {
+  await ensureServiceWorker();
+  const zip = await JSZip.loadAsync(file);
+  const entries: { path: string; blob: Blob }[] = [];
+  const paths: string[] = [];
+
+  const jobs: Promise<void>[] = [];
+  zip.forEach((rawPath, entry) => {
+    if (entry.dir) return;
+    const path = normalizeZipPath(rawPath);
+    if (!path || path.includes("__MACOSX") || path.endsWith(".DS_Store")) return;
+    paths.push(path);
+    jobs.push(
+      entry.async("blob").then((blob) => {
+        entries.push({ path, blob });
+      }),
+    );
+  });
+  await Promise.all(jobs);
+
+  const metaPath = findMetaPath(paths);
+  if (!metaPath) {
+    throw new Error("No meta.lcc2 or meta.lcc found in the ZIP. Upload a full LCC/LCC2 package.");
+  }
+  const { root, relMeta } = packageRootAndRel(metaPath);
+  const relFiles = entries
+    .filter((e) => (root ? e.path.startsWith(root) : true))
+    .map((e) => ({
+      path: root ? e.path.slice(root.length) : e.path,
+      blob: e.blob,
+    }));
+
+  const id = `z${Date.now().toString(36)}`;
+  await putFilesInCache(id, relFiles);
+  const dataPath = `${window.location.origin}/sv-pkg/${id}/${relMeta.split("/").map(encodeURIComponent).join("/")}`;
+  return {
+    kind: "lcc",
+    id,
+    dataPath,
+    label: file.name.replace(/\.zip$/i, "") || "Uploaded package",
+    source: "zip",
+  };
+}
+
+/** Folder picker: files with webkitRelativePath. */
+export async function openLccFromFolder(fileList: FileList): Promise<OpenedScene> {
+  await ensureServiceWorker();
+  const files = Array.from(fileList);
+  if (files.length === 0) throw new Error("Empty folder.");
+
+  const paths = files.map((f) => normalizeZipPath(f.webkitRelativePath || f.name));
+  const metaPath = findMetaPath(paths);
+  if (!metaPath) {
+    throw new Error("No meta.lcc2 or meta.lcc in this folder.");
+  }
+  const { root, relMeta } = packageRootAndRel(metaPath);
+  const relFiles = files.map((f, i) => {
+    const full = paths[i]!;
+    return {
+      path: root ? full.slice(root.length) : full,
+      blob: f,
+    };
+  });
+
+  const id = `f${Date.now().toString(36)}`;
+  await putFilesInCache(id, relFiles);
+  const dataPath = `${window.location.origin}/sv-pkg/${id}/${relMeta.split("/").map(encodeURIComponent).join("/")}`;
+  const top = (files[0]?.webkitRelativePath || "folder").split("/")[0] || "Folder";
+  return { kind: "lcc", id, dataPath, label: top, source: "folder" };
+}
+
+export function openFromUrl(raw: string): OpenedScene {
+  const url = raw.trim();
+  if (!/^https?:\/\//i.test(url)) {
+    throw new Error("Enter a full http(s) URL to meta.lcc2 / meta.lcc / .ply");
+  }
+  const id = `u${Date.now().toString(36)}`;
+  const lower = url.toLowerCase();
+  if (lower.includes(".ply")) {
+    return { kind: "ply", id, dataPath: url, label: url.split("/").pop() || "Remote PLY", source: "url" };
+  }
+  return {
+    kind: "lcc",
+    id,
+    dataPath: url,
+    label: url.split("/").pop() || "Remote LCC",
+    source: "url",
+  };
+}
+
+export async function openPlyFile(file: File): Promise<OpenedScene> {
+  const objectUrl = URL.createObjectURL(file);
+  return {
+    kind: "ply",
+    id: `p${Date.now().toString(36)}`,
+    dataPath: objectUrl,
+    label: file.name,
+    source: "file",
+    objectUrl,
+  };
+}
