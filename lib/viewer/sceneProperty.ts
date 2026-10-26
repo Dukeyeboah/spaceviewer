@@ -6,10 +6,7 @@ export function propertyFromOpenedScene(scene: OpenedScene): ExperienceProperty 
   return {
     id: scene.id,
     title: scene.label,
-    description:
-      scene.kind === "lcc"
-        ? "Your uploaded LCC / LCC2 space — SpaceViewer"
-        : "PLY open — walk/staging/surfaces need LCC2 (PLY preview coming next)",
+    description: "",
     dataPath: scene.dataPath,
     sizeHint: scene.source,
     branding: { accent: "#c4a574", tagline: "SpaceViewer" },

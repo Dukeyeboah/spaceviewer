@@ -49,8 +49,7 @@ import type { CheckpointTransitionMode, ExperienceViewpoint } from "@/lib/viewer
 import { LCC_SDK_VERSION_LABEL } from "@/lib/viewer/lccSdk";
 import {
   clearPackageSession,
-  openFromUrl,
-  openLccFromFolder,
+  ensureServiceWorker,
   openLccFromZip,
   openPlyFile,
   type OpenedScene,
@@ -66,7 +65,11 @@ export function SpaceViewerApp() {
   const [scene, setScene] = useState<OpenedScene | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
   const [opening, setOpening] = useState(false);
-  const [urlDraft, setUrlDraft] = useState("");
+  const [fileNotice, setFileNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    void ensureServiceWorker().catch(() => {});
+  }, []);
 
   const property = useMemo(() => (scene ? propertyFromOpenedScene(scene) : null), [scene]);
   const [overrides, setOverrides] = useState<ExperienceOverrides>(EMPTY_OVERRIDES);
@@ -105,6 +108,7 @@ export function SpaceViewerApp() {
   const [panelOpen, setPanelOpen] = useState(true);
   const [devOpen, setDevOpen] = useState(false);
   const [padsOpen, setPadsOpen] = useState(true);
+  const [eyeDrop, setEyeDrop] = useState(0);
   const [stats, setStats] = useState<TourHostStats | null>(null);
   const [fade, setFade] = useState(false);
   const [resetToken, setResetToken] = useState(0);
@@ -174,6 +178,7 @@ export function SpaceViewerApp() {
   const runOpen = async (fn: () => Promise<OpenedScene> | OpenedScene) => {
     setOpening(true);
     setOpenError(null);
+    setFileNotice(null);
     try {
       const next = await fn();
       if (scene) await closeScene();
@@ -212,89 +217,59 @@ export function SpaceViewerApp() {
     setVpName("");
   };
 
-  const accent = property?.branding?.accent ?? "#c4a574";
-
   if (!scene || !property || !content) {
     return (
-      <div className="sv-landing" style={{ ["--exp-accent" as string]: accent }}>
-        <header className="sv-hero">
+      <div className="sv-landing">
+        <div className="sv-welcome">
           <p className="sv-brand">SpaceViewer</p>
-          <h1>Open your space</h1>
-          <p className="sv-lead">
-            Upload an LCC / LCC2 package or open a hosted URL. Walk, stage furniture, and customise walls —
-            the Experiences toolkit in a shareable app.
-          </p>
-        </header>
-
-        <div className="sv-open-card">
-          <label className="sv-file">
-            <span>ZIP package (LCC / LCC2)</span>
+          <label className={`sv-upload${opening ? " is-busy" : ""}`}>
+            <span>{opening ? "Opening" : "Upload"}</span>
             <input
               type="file"
-              accept=".zip,application/zip"
               disabled={opening}
               onChange={(e) => {
                 const f = e.target.files?.[0];
-                if (f) void runOpen(() => openLccFromZip(f));
                 e.target.value = "";
+                if (!f) return;
+                const name = f.name.toLowerCase();
+                const zip =
+                  name.endsWith(".zip") ||
+                  f.type === "application/zip" ||
+                  f.type === "application/x-zip-compressed";
+                if (zip) {
+                  void runOpen(() => openLccFromZip(f));
+                  return;
+                }
+                if (name.endsWith(".ply")) {
+                  void runOpen(() => openPlyFile(f));
+                  return;
+                }
+                setFileNotice(
+                  "Upload a ZIP of a full LCC or LCC2 package — the scene file together with data.bin — or a .ply point cloud.",
+                );
               }}
             />
           </label>
-          <label className="sv-file">
-            <span>Folder (contains meta.lcc2)</span>
-            <input
-              type="file"
-              // @ts-expect-error webkitdirectory is widely supported
-              webkitdirectory=""
-              directory=""
-              multiple
-              disabled={opening}
-              onChange={(e) => {
-                const list = e.target.files;
-                if (list?.length) void runOpen(() => openLccFromFolder(list));
-                e.target.value = "";
-              }}
-            />
-          </label>
-          <label className="sv-file">
-            <span>PLY (preview — full tour tools need LCC2)</span>
-            <input
-              type="file"
-              accept=".ply"
-              disabled={opening}
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) void runOpen(() => openPlyFile(f));
-                e.target.value = "";
-              }}
-            />
-          </label>
-          <div className="sv-url-row">
-            <input
-              type="url"
-              placeholder="https://…/meta.lcc2"
-              value={urlDraft}
-              onChange={(e) => setUrlDraft(e.target.value)}
-              disabled={opening}
-            />
-            <button
-              type="button"
-              disabled={opening || !urlDraft.trim()}
-              onClick={() => void runOpen(() => openFromUrl(urlDraft))}
-            >
-              Open URL
-            </button>
-          </div>
-          {opening && <p className="exp-hint">Opening… large packages can take a minute.</p>}
-          {openError && <p className="sv-error">{openError}</p>}
+          {opening && <p className="sv-status">Large packages can take a minute.</p>}
         </div>
-
-        <footer className="sv-foot">
-          <p>
-            Ported from Spatial Lab Experiences. User files stay in this browser (Cache Storage) unless you later
-            wire Firebase / R2. LCC SDK {LCC_SDK_VERSION_LABEL}.
-          </p>
-        </footer>
+        {(fileNotice || openError) && !opening && (
+          <div className="sv-modal" role="dialog" aria-modal="true" aria-labelledby="sv-notice-title">
+            <div className="sv-modal-card">
+              <p className="sv-brand" id="sv-notice-title">SpaceViewer</p>
+              <p className="sv-status">{fileNotice || openError}</p>
+              <button
+                type="button"
+                className="sv-upload"
+                onClick={() => {
+                  setFileNotice(null);
+                  setOpenError(null);
+                }}
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -302,23 +277,20 @@ export function SpaceViewerApp() {
   if (scene.kind === "ply") {
     return (
       <div className="sv-landing">
-        <header className="sv-hero">
+        <div className="sv-welcome">
           <p className="sv-brand">SpaceViewer</p>
-          <h1>{scene.label}</h1>
-          <p className="sv-lead">
-            PLY upload is accepted. Full walk / staging / wall tools require an LCC2 package. A SuperSplat PLY
-            preview mode is next.
-          </p>
-          <button type="button" className="sv-primary" onClick={() => void closeScene()}>
-            Choose another file
+          <p className="sv-status">{scene.label}</p>
+          <p className="sv-status">PLY preview is next. Walk tools need an LCC package.</p>
+          <button type="button" className="sv-upload" onClick={() => void closeScene()}>
+            Back
           </button>
-        </header>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className={`exp-page${panelOpen ? "" : " panel-collapsed"}`} style={{ ["--exp-accent" as string]: accent }}>
+    <div className={`exp-page sv-session${panelOpen ? "" : " panel-collapsed"}`} style={{ ["--exp-accent" as string]: "#111" }}>
       <ExperienceTourHost
         ref={hostRef}
         key={property.dataPath}
@@ -343,6 +315,7 @@ export function SpaceViewerApp() {
         onMapOutline={() => {}}
         resetToken={resetToken}
         sampleCameraToken={sampleToken}
+        eyeDrop={eyeDrop}
         stagingPlacements={stagingPlacements}
         stagingVisible={stagedVisible}
         stagingEditEnabled={devOpen}
@@ -405,8 +378,22 @@ export function SpaceViewerApp() {
 
       <div className={`exp-fade${fade ? " on" : ""}`} aria-hidden />
 
-      {navMode === "first-person" && (
-        <WalkOnScreenControls api={walkApi} visible={padsOpen} />
+      {navMode === "orbit" && (
+        <>
+          <div className="sv-orbit-orb" aria-hidden />
+          <p className="sv-orbit-hint">Click and drag the screen to orbit around it</p>
+        </>
+      )}
+
+      {navMode === "first-person" && padsOpen && (
+        <>
+          <div className="exp-nav-dock exp-nav-dock-left">
+            <WalkOnScreenControls api={walkApi} visible which="move" />
+          </div>
+          <div className="exp-nav-dock exp-nav-dock-right">
+            <WalkOnScreenControls api={walkApi} visible which="look" />
+          </div>
+        </>
       )}
 
       {panelOpen && (
@@ -415,7 +402,6 @@ export function SpaceViewerApp() {
             <div className="exp-panel-titles">
               <div className="exp-brand">SpaceViewer</div>
               <h1>{property.title}</h1>
-              <p className="exp-desc">{property.description}</p>
             </div>
             <button type="button" className="exp-panel-collapse" onClick={() => setPanelOpen(false)} title="Hide panel">
               ‹
@@ -439,6 +425,23 @@ export function SpaceViewerApp() {
 
           <QualityLever value={qualityId} onChange={setQuality} />
 
+          <div className="exp-quality-lever" role="group" aria-label="Camera height">
+            <div className="exp-quality-lever-head">
+              <span className="exp-quality-lever-label">Height</span>
+              <span className="exp-quality-lever-value">{eyeDrop === 0 ? "Default" : `−${Math.round(eyeDrop * 100)} cm`}</span>
+            </div>
+            <input
+              className="exp-quality-lever-range"
+              type="range"
+              min={0}
+              max={120}
+              step={5}
+              value={120 - Math.round(eyeDrop * 100)}
+              aria-valuetext={eyeDrop === 0 ? "Default height" : `${Math.round(eyeDrop * 100)} centimetres lower`}
+              onChange={(e) => setEyeDrop((120 - Number(e.target.value)) / 100)}
+            />
+          </div>
+
           <b className="exp-sub">Checkpoints</b>
           {content.viewpoints.length === 0 ? (
             <p className="exp-hint">None yet — open Dev to capture.</p>
@@ -458,20 +461,32 @@ export function SpaceViewerApp() {
           )}
 
           <div className="exp-toolbar">
-            <button type="button" className={devOpen ? "exp-icon-btn on" : "exp-icon-btn"} onClick={() => setDevOpen((v) => !v)}>
-              Dev
+            <button type="button" className={devOpen ? "exp-icon-btn sv-tool-icon on" : "exp-icon-btn sv-tool-icon"} onClick={() => setDevOpen((v) => !v)} aria-label="Dev" title="Dev">
+              <ToolIcon name="dev" />
             </button>
-            <button type="button" className="exp-icon-btn" onClick={() => setResetToken((n) => n + 1)}>
-              Reset
+            <button
+              type="button"
+              className="exp-icon-btn sv-tool-icon"
+              onClick={() => setNavMode((m) => (m === "first-person" ? "orbit" : "first-person"))}
+              aria-label={navMode === "first-person" ? "Orbit" : "Walk"}
+              title={navMode === "first-person" ? "Orbit" : "Walk"}
+            >
+              <ToolIcon name={navMode === "first-person" ? "orbit" : "walk"} />
             </button>
-            <button type="button" className="exp-icon-btn" onClick={() => setNavMode((m) => (m === "first-person" ? "orbit" : "first-person"))}>
-              {navMode === "first-person" ? "Orbit" : "Walk"}
+            <button
+              type="button"
+              className={padsOpen ? "exp-icon-btn sv-tool-icon on" : "exp-icon-btn sv-tool-icon"}
+              onClick={() => setPadsOpen((v) => !v)}
+              aria-label="Pads"
+              title="Pads"
+            >
+              <ToolIcon name="pads" />
             </button>
-            <button type="button" className="exp-icon-btn" onClick={() => setPadsOpen((v) => !v)}>
-              Pads
+            <button type="button" className="exp-icon-btn sv-tool-icon" onClick={() => setResetToken((n) => n + 1)} aria-label="Reset" title="Reset">
+              <ToolIcon name="reset" />
             </button>
-            <button type="button" className="exp-icon-btn" onClick={() => void closeScene()}>
-              Close
+            <button type="button" className="exp-icon-btn sv-tool-icon" onClick={() => void closeScene()} aria-label="Close" title="Close">
+              <ToolIcon name="close" />
             </button>
           </div>
 
@@ -506,7 +521,7 @@ export function SpaceViewerApp() {
                   </button>
                 ))}
               </ExpDevSection>
-              <ExpDevSection id="sv-staging" title="Virtual staging" defaultOpen={false}>
+              <ExpDevSection id="sv-staging" title="Upload objects" defaultOpen={false}>
                 <StagingEditor
                   propertyId={property.id}
                   placements={stagingPlacements}
@@ -563,10 +578,76 @@ export function SpaceViewerApp() {
       )}
 
       {!panelOpen && (
-        <button type="button" className="exp-panel-tab" onClick={() => setPanelOpen(true)}>
-          Panel
+        <button type="button" className="exp-panel-tab" onClick={() => setPanelOpen(true)} aria-label="Show panel" title="Show panel">
+          <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden>
+            <rect x="1.5" y="2" width="13" height="12" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.4" />
+            <path d="M6 2.2v11.6" stroke="currentColor" strokeWidth="1.4" />
+          </svg>
         </button>
       )}
     </div>
+  );
+}
+
+function ToolIcon({ name }: { name: "dev" | "walk" | "orbit" | "pads" | "reset" | "close" }) {
+  const props = {
+    width: 16,
+    height: 16,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 1.7,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+    "aria-hidden": true as const,
+  };
+  if (name === "dev") {
+    return (
+      <svg {...props}>
+        <circle cx="12" cy="12" r="3" />
+        <path d="M12 3v2.2M12 18.8V21M3 12h2.2M18.8 12H21M5.8 5.8l1.6 1.6M16.6 16.6l1.6 1.6M18.2 5.8l-1.6 1.6M7.4 16.6l-1.6 1.6" />
+      </svg>
+    );
+  }
+  if (name === "walk") {
+    return (
+      <svg {...props}>
+        <circle cx="14" cy="4.2" r="1.7" fill="currentColor" stroke="none" />
+        <path d="M13.2 6.4l-1.2 5.2" />
+        <path d="M12 11.6l-3.4 6.2" />
+        <path d="M12 11.6l3.8 5.6" />
+        <path d="M12.2 8.6l4.2 1.2" />
+        <path d="M12.2 8.8L8.4 11" />
+      </svg>
+    );
+  }
+  if (name === "orbit") {
+    return (
+      <svg {...props}>
+        <rect x="2.5" y="7" width="11" height="9" rx="1.5" />
+        <path d="M13.5 10.2 20 7.2v8.6l-6.5-3" />
+      </svg>
+    );
+  }
+  if (name === "pads") {
+    return (
+      <svg {...props}>
+        <path d="M12 3.5v5M12 15.5v5M3.5 12h5M15.5 12h5" />
+        <circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none" />
+      </svg>
+    );
+  }
+  if (name === "reset") {
+    return (
+      <svg {...props}>
+        <path d="M5 12a7 7 0 1 0 2-4.9" />
+        <path d="M5 4.5V10H10.5" />
+      </svg>
+    );
+  }
+  return (
+    <svg {...props}>
+      <path d="M6 6l12 12M18 6 6 18" />
+    </svg>
   );
 }

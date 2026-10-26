@@ -123,6 +123,8 @@ type Props = {
   onMapOutline?: (lines: MapPolyline[]) => void;
   resetToken: number;
   sampleCameraToken: number;
+  /** Metres to lower the standing camera from the scan's default height. */
+  eyeDrop?: number;
   /** EXP-04 virtual staging */
   stagingPlacements?: StagingPlacement[];
   stagingVisible?: boolean;
@@ -204,6 +206,7 @@ export const ExperienceTourHost = forwardRef<TourHostHandle, Props>(function Exp
     onMapOutline,
     resetToken,
     sampleCameraToken,
+    eyeDrop = 0,
     stagingPlacements = [],
     stagingVisible = true,
     stagingEditEnabled = false,
@@ -278,6 +281,9 @@ export const ExperienceTourHost = forwardRef<TourHostHandle, Props>(function Exp
   const onMapOutlineRef = useRef(onMapOutline);
   const floorRef = useRef(floor);
   const navModeRef = useRef(navMode);
+  const eyeDropRef = useRef(eyeDrop);
+  eyeDropRef.current = eyeDrop;
+  const appliedDropRef = useRef(0);
   const stagingPlaceModeRef = useRef(stagingPlaceMode);
   const stagingEditRef = useRef(stagingEditEnabled);
   const stagingVisibleRef = useRef(stagingVisible);
@@ -636,24 +642,26 @@ export const ExperienceTourHost = forwardRef<TourHostHandle, Props>(function Exp
         }
 
         if (lcc.intersectsRayFromOriginExt) {
+          const stand = Math.max(0.7, EYE - eyeDropRef.current);
           const floor = lcc.intersectsRayFromOriginExt({
             origin: { x, y: y + 0.2, z },
             direction: { x: 0, y: -1, z: 0 },
-            maxDistance: EYE + 0.9,
+            maxDistance: stand + 0.9,
           });
           if (floor?.point && (floor.normal?.y === undefined || floor.normal.y > 0.45)) {
-            const proposed = floor.point.y + EYE;
+            const proposed = floor.point.y + stand;
             if (Math.abs(proposed - y) < 0.85) y = proposed;
           }
         } else if (lcc.raycastFromOrigin) {
+          const stand = Math.max(0.7, EYE - eyeDropRef.current);
           const floor = lcc.raycastFromOrigin({
             origin: { x, y: y + 0.2, z },
             direction: { x: down.x, y: down.y, z: down.z },
-            maxDistance: EYE + 0.9,
+            maxDistance: stand + 0.9,
             radius: 0.05,
           });
           if (floor) {
-            const proposed = floor.y + EYE;
+            const proposed = floor.y + stand;
             if (Math.abs(proposed - y) < 0.85) y = proposed;
           }
         }
@@ -1132,6 +1140,11 @@ export const ExperienceTourHost = forwardRef<TourHostHandle, Props>(function Exp
               void resolveInteriorView(path).then((view) => {
                 if (cancelled) return;
                 applyInteriorView(camera, orbit, (t) => walk.lookAt(t), view);
+                const drop = eyeDropRef.current;
+                camera.position.y -= drop;
+                orbit.target.y -= drop;
+                orbit.update();
+                appliedDropRef.current = drop;
                 walk.syncFromCamera();
                 applyNavMode(navModeRef.current);
                 if (apiRef.current) apiRef.current.home = view;
@@ -1391,8 +1404,24 @@ export const ExperienceTourHost = forwardRef<TourHostHandle, Props>(function Exp
     api.fly = null;
     onFadeRef.current?.(false);
     applyInteriorView(api.camera, api.orbit, (t) => api.walk.lookAt(t), api.home);
+    const drop = eyeDropRef.current;
+    api.camera.position.y -= drop;
+    api.orbit.target.y -= drop;
+    api.orbit.update();
+    appliedDropRef.current = drop;
     api.walk.syncFromCamera();
   }, [resetToken]);
+
+  useEffect(() => {
+    const api = apiRef.current;
+    if (!api) return;
+    const delta = eyeDrop - appliedDropRef.current;
+    if (delta === 0) return;
+    api.camera.position.y -= delta;
+    api.orbit.target.y -= delta;
+    api.orbit.update();
+    appliedDropRef.current = eyeDrop;
+  }, [eyeDrop]);
 
   useEffect(() => {
     const api = apiRef.current;

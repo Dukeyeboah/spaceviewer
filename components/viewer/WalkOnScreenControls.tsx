@@ -136,7 +136,7 @@ export function WalkOnScreenControls({ visible, api, which = "both" }: Props) {
 
       {showLook && (
         <div className="exp-pad" aria-label="Look / rotate">
-          <div className="exp-pad-label">Look</div>
+          <div className="exp-pad-label">Rotate</div>
           <div className="exp-pad-grid">
             <span className="exp-pad-spacer" />
             <button type="button" className="exp-pad-btn look" aria-label="Tilt up" {...look("pitch", 1)}>

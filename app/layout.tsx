@@ -1,5 +1,12 @@
 import type { Metadata } from "next";
+import { Orbitron } from "next/font/google";
 import "./spaceviewer.css";
+
+const orbitron = Orbitron({
+  subsets: ["latin"],
+  weight: ["400", "500", "700"],
+  variable: "--font-display",
+});
 
 export const metadata: Metadata = {
   title: "SpaceViewer",
@@ -8,7 +15,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" className={orbitron.variable}>
       <body>{children}</body>
     </html>
   );

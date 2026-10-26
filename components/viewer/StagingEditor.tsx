@@ -92,7 +92,6 @@ export function StagingEditor({
 
   return (
     <div className="exp-staging">
-      <b className="exp-sub">Virtual staging (EXP-04)</b>
       <p className="exp-hint">
         1) Pick Built-in chair or Upload GLB → 2) <b>Place on floor</b> → 3) move the blue ring on the floor → 4) click
         to drop. Oversized exports (cm/mm) are auto-fitted to ~1 m. Gizmo is Dev-only.

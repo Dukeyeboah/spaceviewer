@@ -20,20 +20,20 @@ export function lccPointToThree(x: number, y: number, z: number, matrix = new TH
   return new THREE.Vector3(x, y, z).applyMatrix4(matrix);
 }
 
-function posesUrlFromMeta(dataPath: string): string | null {
+function posesUrlsFromMeta(dataPath: string): string[] {
   try {
     const url = dataPath.startsWith("http") ? new URL(dataPath) : new URL(dataPath, typeof window !== "undefined" ? window.location.origin : "http://local");
-    // …/Something/meta.lcc2 → …/Something/info/poses.json
+    // …/Something/Scene.lcc → sibling info/poses.json (LCC2 samples) and assets/poses.json (LCC Cloud).
     const parts = url.pathname.split("/");
-    const file = parts.pop() ?? "";
-    if (!/\.lcc2?$/i.test(file) && file !== "meta.lcc" && file !== "meta.lcc2") {
-      // still try sibling info/
-    }
-    parts.push("info", "poses.json");
-    url.pathname = parts.join("/");
-    return url.toString();
+    parts.pop();
+    const dir = parts.join("/");
+    return ["info/poses.json", "assets/poses.json"].map((rel) => {
+      const next = new URL(url.toString());
+      next.pathname = `${dir}/${rel}`;
+      return next.toString();
+    });
   } catch {
-    return null;
+    return [];
   }
 }
 
@@ -41,15 +41,14 @@ type PoseRow = { T?: number[]; R?: number[] };
 
 /** Build an interior eye/target from capture poses, or a modest fallback near the origin. */
 export async function resolveInteriorView(dataPath: string): Promise<InteriorView> {
-  const posesUrl = posesUrlFromMeta(dataPath);
-  if (posesUrl) {
+  for (const posesUrl of posesUrlsFromMeta(dataPath)) {
     try {
       const res = await fetch(posesUrl);
-      if (res.ok) {
-        const json = (await res.json()) as { poses?: PoseRow[] } | PoseRow[];
-        const rows = Array.isArray(json) ? json : (json.poses ?? []);
-        const translations = rows.map((p) => p.T).filter((t): t is number[] => Array.isArray(t) && t.length >= 3);
-        if (translations.length >= 8) {
+      if (!res.ok) continue;
+      const json = (await res.json()) as { poses?: PoseRow[] } | PoseRow[];
+      const rows = Array.isArray(json) ? json : (json.poses ?? []);
+      const translations = rows.map((p) => p.T).filter((t): t is number[] => Array.isArray(t) && t.length >= 3);
+      if (translations.length >= 8) {
           const worlds = translations.map((t) => lccPointToThree(t[0], t[1], t[2]));
           const sorted = (axis: "x" | "y" | "z") => [...worlds].sort((a, b) => a[axis] - b[axis]);
           const mid = (axis: "x" | "y" | "z") => {
@@ -76,7 +75,6 @@ export async function resolveInteriorView(dataPath: string): Promise<InteriorVie
           target.y = eye.y - 0.15;
           return { eye, target, source: "poses" };
         }
-      }
     } catch {
       /* fall through */
     }
